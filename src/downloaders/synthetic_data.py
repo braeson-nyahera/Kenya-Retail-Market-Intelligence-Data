@@ -5,9 +5,7 @@ import random
 from pathlib import Path
 from datetime import datetime, timedelta
 
-# ==========================================
 # CONFIGURATION & SEEDING
-# ==========================================
 SEED = 42
 random.seed(SEED)
 OUT_DIR = Path("../../data/synthetic")
@@ -40,9 +38,7 @@ def log_dirt(entity, issue_type, identifier, details=""):
         "timestamp": datetime.now().isoformat()
     })
 
-# ==========================================
 # MOCK KAMIS BASE DATA
-# ==========================================
 # Simulating the data/kamis/ historical data structure if files aren't parsed
 MOCK_KAMIS_COMMODITIES = [
     {"commodity": "Dry Maize", "category": "Cereals", "base_price_kes": 80},
@@ -57,9 +53,7 @@ MOCK_KAMIS_COMMODITIES = [
     {"commodity": "Onions Dry", "category": "Vegetables", "base_price_kes": 110},
 ]
 
-# ==========================================
 # ENTITY GENERATORS
-# ==========================================
 def generate_suppliers():
     suppliers = []
     for i in range(1, VOLUME["suppliers"] + 1):
@@ -123,9 +117,8 @@ def generate_products(suppliers):
         
     return products, prod_to_commodity_map
 
-# ==========================================
+
 # HISTORICAL POS TRANSACTION GENERATOR
-# ==========================================
 def emit_pos_line(tx_id, line_no, stores, products, current_date, emitter_func):
     store = random.choice(stores)
     product = random.choice(products)
@@ -161,9 +154,7 @@ def emit_pos_line(tx_id, line_no, stores, products, current_date, emitter_func):
         emitter_func(line_item)
         log_dirt("pos_lines", "DUPLICATE_ROW", tx_id, f"Duplicate emitted for line {line_no}")
 
-# ==========================================
 # EMISSION STRATEGIES (BATCH & STREAM SKELETON)
-# ==========================================
 class DataWriter:
     def __init__(self, mode="file", filepath=None):
         self.mode = mode
@@ -189,9 +180,7 @@ class DataWriter:
         if self.file:
             self.file.close()
 
-# ==========================================
 # MAIN EXECUTION PIPELINE
-# ==========================================
 if __name__ == "__main__":
     print("Generating Master Data Dimensions...")
     suppliers = generate_suppliers()

@@ -104,9 +104,7 @@ class KnbsCpiDeflatorPipeline:
 
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                # -------------------------------------------------------------
                 # STRATEGY A: COMPREHENSIVE TEXT LAYER SWEEP (Any historical month)
-                # -------------------------------------------------------------
                 full_doc_text = ""
                 for page in pdf.pages[:4]:
                     text = page.extract_text()
@@ -135,9 +133,7 @@ class KnbsCpiDeflatorPipeline:
                     if match and not mom_inflation:
                         mom_inflation = float(match.group(1))
 
-                # -------------------------------------------------------------
                 # STRATEGY B: GEOMETRIC TOKEN EXTRACTION FOR OVERALL CPI INDEX
-                # -------------------------------------------------------------
                 # Crawl the page segments looking for the absolute index values (e.g., 146.56 to 156.47)
                 all_found_floats = []
                 for page in pdf.pages[:3]:
@@ -152,9 +148,7 @@ class KnbsCpiDeflatorPipeline:
                     # In chronological charts or data matrices, the latest index value maps to the maximum float
                     overall_cpi = max(all_found_floats)
 
-                # -------------------------------------------------------------
                 # STRATEGY C: TABLE ROW MATRIX EXTRACTION (Fallback if text matches drift)
-                # -------------------------------------------------------------
                 if overall_cpi is None or yoy_inflation is None:
                     for page in pdf.pages[:3]:
                         tables = page.extract_tables()
