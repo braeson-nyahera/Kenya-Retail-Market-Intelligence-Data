@@ -8,9 +8,12 @@ wheels/
 
 # Virtual environments
 .venv
+.qodo
 
 #Outputs
 /src/downloaders/output/
 *.csv
 *.pdf
 *json
+data/
+output/

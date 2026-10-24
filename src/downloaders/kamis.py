@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 import re
 import time
+import requests
+import pandas as pd
 from io import StringIO
 from pathlib import Path
-import pandas as pd
-import requests
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://kamis.kilimo.go.ke/site/market"
-OUT_DIR = Path("../../data/kamis")
+OUT_DIR = Path("data/kamis")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 # Define the single master output file path
 MASTER_CSV_PATH = OUT_DIR / "kamis_combined_products.csv"

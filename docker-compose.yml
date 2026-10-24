@@ -1,14 +1,16 @@
 services:
-  # app:
-  #   build: .
-  #   container_name: retail_app
-  #   restart: always
-  #   depends_on:
-  #     - postgres
-  #     - kafka
-  #   environment:
-  #     - DATABASE_URL=postgresql://retail_user:retail_password@postgres:5432/kenya_market_db
-  #     - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+  app:
+    build: .
+    container_name: retail_app
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://retail_user:retail_password@postgres:5432/kenya_market_db
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
 
   postgres:
     image: postgres:16-alpine
@@ -22,6 +24,12 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U retail_user -d kenya_market_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   kafka:
     image: apache/kafka:latest
@@ -39,8 +47,18 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s    
 
 volumes:
   postgres_data:
+  kafka_data:

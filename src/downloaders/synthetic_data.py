@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 # CONFIGURATION & SEEDING
 SEED = 42
 random.seed(SEED)
-OUT_DIR = Path("../../data/synthetic")
+OUT_DIR = Path("data/synthetic")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 VOLUME = {
@@ -181,7 +181,7 @@ class DataWriter:
             self.file.close()
 
 # MAIN EXECUTION PIPELINE
-if __name__ == "__main__":
+def main():
     print("Generating Master Data Dimensions...")
     suppliers = generate_suppliers()
     stores = generate_stores()
@@ -222,3 +222,6 @@ if __name__ == "__main__":
     print("\nGeneration Completed Successfully!")
     print(f"Generated: {len(stores)} stores, {len(products)} products, {len(suppliers)} suppliers.")
     print(f"Injected anomalies logged in output/dirt_manifest.json (Total clean-up targets: {len(dirt_manifest)})")
+
+if __name__ == "__main__":
+    main()

@@ -1,15 +1,19 @@
-from openpyxl.styles import named_styles
 import os
 import re
-import requests
-import pandas as pd
-from bs4 import BeautifulSoup
 import urllib3
-from datetime import datetime
+import requests
 import pdfplumber
+import pandas as pd
+from pathlib import Path
+from bs4 import BeautifulSoup
+from datetime import datetime
+
 
 # Suppress insecure SSL warnings from portal scraping handshakes
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+OUT_DIR = Path("data/knbs")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 class KnbsCpiDeflatorPipeline:
     def __init__(self):
@@ -17,9 +21,9 @@ class KnbsCpiDeflatorPipeline:
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-        self.pdf_dir = "../../data/knbs_downloads/cpi_pdfs"
-        self.output_csv = "../../data/knbs_downloads/cpi_deflator_series.csv"
-        self.fallback_file = "../../data/knbs_downloads/cpi_deflator_fallback.csv"
+        self.pdf_dir = f"{OUT_DIR}/cpi_pdfs"
+        self.output_csv = f"{OUT_DIR}/cpi_deflator_series.csv"
+        self.fallback_file = f"{OUT_DIR}/cpi_deflator_fallback.csv"
         
         os.makedirs(self.pdf_dir, exist_ok=True)
         self._ensure_fallback_exists()
@@ -232,6 +236,10 @@ class KnbsCpiDeflatorPipeline:
             print(f"Total Rows Saved: {len(df_final)} months.")
             print(df_final.to_string(index=False))
             print("="*70)
-if __name__ == "__main__":
+
+def main():
     engine = KnbsCpiDeflatorPipeline()
     engine.execute_deflator_pipeline()
+
+if __name__ == "__main__":
+    main()
