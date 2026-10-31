@@ -1,17 +1,8 @@
 services:
-  app:
-    build: .
-    container_name: retail_app
-    restart: "no"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_started
-    environment:
-      - DATABASE_URL=postgresql://retail_user:retail_password@postgres:5432/kenya_market_db
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
 
+  # --------------------------------------------------------------------------
+  # PostgreSQL — Airflow metadata DB + Data Warehouse
+  # --------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     container_name: retail_postgres
@@ -23,18 +14,22 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./src/warehouse/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U retail_user -d kenya_market_db"]
+      test: [ "CMD-SHELL", "pg_isready -U retail_user -d kenya_market_db" ]
       interval: 5s
       timeout: 5s
       retries: 5
       start_period: 10s
 
+  # --------------------------------------------------------------------------
+  # Apache Kafka (KRaft mode) — POS event streaming broker
+  # --------------------------------------------------------------------------
   kafka:
     image: apache/kafka:latest
     container_name: retail_kafka
-    profiles: ["kafka", "simulation", "producer", "consumer"]
+    profiles: [ "kafka", "simulation", "producer", "consumer" ]
     ports:
       - "9092:9092"
     extra_hosts:
@@ -56,16 +51,19 @@ services:
       - kafka_data:/var/lib/kafka/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "/bin/bash -c '</dev/tcp/127.0.0.1/9092' || exit 1"]
+      test: [ "CMD-SHELL", "/bin/bash -c '</dev/tcp/127.0.0.1/9092' || exit 1" ]
       interval: 5s
       timeout: 5s
       retries: 5
       start_period: 10s
 
+  # --------------------------------------------------------------------------
+  # Kafka UI — Topic browser at http://localhost:8080
+  # --------------------------------------------------------------------------
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:latest
     container_name: retail_kafka_ui
-    profiles: ["kafka", "ui", "simulation"]
+    profiles: [ "kafka", "ui", "simulation" ]
     ports:
       - "8080:8080"
     environment:
@@ -75,42 +73,94 @@ services:
     depends_on:
       - kafka
 
+  # --------------------------------------------------------------------------
+  # POS Simulation — streams 1,000 receipts then exits
+  # Runs both producer + bronze consumer together.
+  # --------------------------------------------------------------------------
   simulation:
     build: .
     container_name: retail_pos_simulation
-    profiles: ["simulation"]
+    profiles: [ "simulation" ]
     depends_on:
       - kafka
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     volumes:
       - ./data:/app/data
-    command: ["uv", "run", "python", "src/pos_simulation/run_all.py", "--limit", "1000", "--delay", "0.01"]
+    command: [ "uv", "run", "python", "src/pos_simulation/run_all.py", "--limit", "1000", "--delay", "0.01" ]
 
+  # --------------------------------------------------------------------------
+  # POS Producer only — streams receipts into Kafka
+  # --------------------------------------------------------------------------
   pos-producer:
     build: .
     container_name: retail_pos_producer
-    profiles: ["producer"]
+    profiles: [ "producer" ]
     depends_on:
       - kafka
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     volumes:
       - ./data:/app/data
-    command: ["uv", "run", "python", "src/pos_simulation/pos_producer.py", "--limit", "1000", "--delay", "0.01"]
+    command: [ "uv", "run", "python", "src/pos_simulation/pos_producer.py", "--limit", "1000", "--delay", "0.01" ]
 
+  # --------------------------------------------------------------------------
+  # Bronze Writer only — consumes Kafka → writes Bronze JSONL
+  # --------------------------------------------------------------------------
   bronze-writer:
     build: .
     container_name: retail_bronze_writer
-    profiles: ["consumer"]
+    profiles: [ "consumer" ]
     depends_on:
       - kafka
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     volumes:
       - ./data:/app/data
-    command: ["uv", "run", "python", "src/pos_simulation/bronze_writer.py"]
+    command: [ "uv", "run", "python", "src/pos_simulation/bronze_writer.py" ]
+
+  # --------------------------------------------------------------------------
+  # Apache Airflow — Standalone (webserver + scheduler in one container)
+  # Orchestrates: Spark ETL (Bronze→Silver→Gold) + Warehouse init & loading.
+  # UI: http://localhost:8085  |  admin / admin
+  # --------------------------------------------------------------------------
+  airflow:
+    image: apache/airflow:2.10.2-python3.12
+    container_name: retail_airflow
+    profiles: [ "airflow" ]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://retail_user:retail_password@postgres:5432/kenya_market_db
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__WEBSERVER__SECRET_KEY: "kenya-retail-secret-change-in-prod"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      DATABASE_URL: postgresql://retail_user:retail_password@postgres:5432/kenya_market_db
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+    ports:
+      - "8085:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
+      - airflow_logs:/opt/airflow/logs
+    command: >
+      bash -c "
+        pip install --quiet pyspark psycopg2-binary pandas pyarrow sqlalchemy &&
+        apt-get update -qq && apt-get install -y -qq openjdk-17-jre-headless &&
+        airflow db migrate &&
+        airflow users create --username admin --password admin
+          --firstname Admin --lastname User --role Admin
+          --email admin@retail.local 2>/dev/null || true &&
+        airflow scheduler &
+        exec airflow webserver
+      "
 
 volumes:
   postgres_data:
   kafka_data:
+  airflow_logs:
