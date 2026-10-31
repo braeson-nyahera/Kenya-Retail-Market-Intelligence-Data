@@ -2,12 +2,12 @@ services:
   app:
     build: .
     container_name: retail_app
-    restart: always
+    restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
       kafka:
-        condition: service_healthy
+        condition: service_started
     environment:
       - DATABASE_URL=postgresql://retail_user:retail_password@postgres:5432/kenya_market_db
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
@@ -34,8 +34,11 @@ services:
   kafka:
     image: apache/kafka:latest
     container_name: retail_kafka
+    profiles: ["kafka", "simulation", "producer", "consumer"]
     ports:
       - "9092:9092"
+    extra_hosts:
+      - "kafka:127.0.0.1"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -53,15 +56,16 @@ services:
       - kafka_data:/var/lib/kafka/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
-      interval: 10s
+      test: ["CMD-SHELL", "/bin/bash -c '</dev/tcp/127.0.0.1/9092' || exit 1"]
+      interval: 5s
       timeout: 5s
-      retries: 10
-      start_period: 30s    
+      retries: 5
+      start_period: 10s
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:latest
-    profiles: ["ui"]
+    container_name: retail_kafka_ui
+    profiles: ["kafka", "ui", "simulation"]
     ports:
       - "8080:8080"
     environment:
@@ -69,8 +73,43 @@ services:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
     depends_on:
-      kafka:
-        condition: service_healthy  
+      - kafka
+
+  simulation:
+    build: .
+    container_name: retail_pos_simulation
+    profiles: ["simulation"]
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    volumes:
+      - ./data:/app/data
+    command: ["uv", "run", "python", "src/pos_simulation/run_all.py", "--limit", "1000", "--delay", "0.01"]
+
+  pos-producer:
+    build: .
+    container_name: retail_pos_producer
+    profiles: ["producer"]
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    volumes:
+      - ./data:/app/data
+    command: ["uv", "run", "python", "src/pos_simulation/pos_producer.py", "--limit", "1000", "--delay", "0.01"]
+
+  bronze-writer:
+    build: .
+    container_name: retail_bronze_writer
+    profiles: ["consumer"]
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    volumes:
+      - ./data:/app/data
+    command: ["uv", "run", "python", "src/pos_simulation/bronze_writer.py"]
 
 volumes:
   postgres_data:
