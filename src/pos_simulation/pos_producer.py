@@ -9,6 +9,7 @@ Usage:
 import argparse
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -25,9 +26,17 @@ ap = argparse.ArgumentParser(description="POS Transaction Producer for Apache Ka
 ap.add_argument("--source", default="data/synthetic/historical_pos_lines.csv", help="Path to historical POS CSV")
 ap.add_argument("--bootstrap", default=DEFAULT_BOOTSTRAP, help="Kafka bootstrap server (default: %(default)s)")
 ap.add_argument("--delay", type=float, default=0, help="seconds to wait between receipts")
+ap.add_argument("--random-delay-min", type=float, help="minimum random seconds to wait between receipts")
+ap.add_argument("--random-delay-max", type=float, help="maximum random seconds to wait between receipts")
 ap.add_argument("--limit", type=int, help="stop after N receipts")
 ap.add_argument("--dry-run", action="store_true", help="print JSON without sending to Kafka")
 args = ap.parse_args()
+
+if (args.random_delay_min is None) != (args.random_delay_max is None):
+    ap.error("--random-delay-min and --random-delay-max must be provided together")
+if args.random_delay_min is not None:
+    if args.random_delay_min < 0 or args.random_delay_max < args.random_delay_min:
+        ap.error("random delays must be non-negative and max must be at least min")
 
 source_path = Path(args.source)
 if not source_path.exists():
@@ -89,7 +98,9 @@ for tx_id, g in df.groupby("transaction_id", sort=False):
         print(f"Sent {sent} receipts...")
     if args.limit and sent >= args.limit:
         break
-    if args.delay:
+    if args.random_delay_min is not None:
+        time.sleep(random.uniform(args.random_delay_min, args.random_delay_max))
+    elif args.delay:
         time.sleep(args.delay)
 
 if producer:
