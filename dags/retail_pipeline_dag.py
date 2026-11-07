@@ -20,6 +20,7 @@ bad data never propagates to the next layer or into the warehouse.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -34,7 +35,7 @@ from src.quality.run_quality import DATASETS, load_dataset, DATA
 # Paths - resolve correctly whether running inside container or locally
 # DAGs folder is typically /opt/airflow/dags; project root is one level up
 _DAGS_DIR = Path(__file__).resolve().parent
-REPO_ROOT = _DAGS_DIR.parent          # /opt/airflow  or  c:/DEV/Kenya-...
+REPO_ROOT = Path(os.getenv("PROJECT_ROOT", _DAGS_DIR.parent))
 DATA_DIR = REPO_ROOT / "data"
 SRC_DIR = REPO_ROOT / "src"
 

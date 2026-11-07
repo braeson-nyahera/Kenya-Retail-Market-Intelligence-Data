@@ -11,7 +11,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", Path(__file__).resolve().parents[2]))
 POS_EVENT_COUNT = int(os.getenv("POS_SIMULATION_EVENT_COUNT", "10"))
 
 

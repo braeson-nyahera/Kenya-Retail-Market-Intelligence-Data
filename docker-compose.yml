@@ -12,8 +12,9 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
     AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.session
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    PROJECT_ROOT: /opt/project
     PYTHONPATH: /opt/project
-    _PIP_ADDITIONAL_REQUIREMENTS: beautifulsoup4 html5lib kafka-python openpyxl pandas pdfplumber requests psycopg2-binary
+    _PIP_ADDITIONAL_REQUIREMENTS: beautifulsoup4 great-expectations html5lib kafka-python openpyxl pandas pdfplumber psycopg2-binary pyarrow pyspark requests sqlalchemy
   volumes:
     - ./:/opt/project
     - ./dags:/opt/airflow/dags
