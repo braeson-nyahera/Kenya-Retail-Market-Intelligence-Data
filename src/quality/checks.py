@@ -1,7 +1,6 @@
-"""Small Great Expectations checks: missing values and expected column formats."""
+"""Small, dependency-light checks for missing values and expected column formats."""
 
 import pandas as pd
-from great_expectations.dataset import PandasDataset
 
 
 def check_dataframe(df, dataset, expected_columns, required_columns, max_missing_pct=1.0, types=None):
@@ -28,18 +27,14 @@ def check_dataframe(df, dataset, expected_columns, required_columns, max_missing
                     else f"All {len(expected_columns)} expected columns are present."),
     })
 
-    # Great Expectations handles the actual column completeness expectations.
-    gx_df = PandasDataset(clean)
     for column in required_columns:
         if column not in clean.columns:
             continue  # The missing-column check above already reports this.
-        expectation = gx_df.expect_column_values_to_not_be_null(
-            column, mostly=max(0.0, min(1.0, 1 - max_missing_pct / 100))
-        )
         missing_pct = round(clean[column].isna().mean() * 100, 2)
+        passed = missing_pct <= max_missing_pct
         results.append({
             "dataset": dataset, "check": "missing_values", "column": column,
-            "status": "PASS" if expectation["success"] else "FAIL",
+            "status": "PASS" if passed else "FAIL",
             "message": f"{missing_pct}% missing; maximum allowed is {max_missing_pct}%.",
         })
 

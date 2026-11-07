@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from checks import check_dataframe
+try:
+    from .checks import check_dataframe
+except ImportError:  # Supports direct execution: python src/quality/run_quality.py
+    from checks import check_dataframe
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
