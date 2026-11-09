@@ -1,310 +1,235 @@
 # Kenya Retail Market Intelligence Data Platform
 
-Retail market data intelligence and transaction streaming platform for Kenyan market commodities, CPI indicators, and POS retail transactions.
+An end-to-end local data platform for analysing Kenyan retail activity, commodity prices, and inflation. The project combines KAMIS market-price data, KNBS CPI data, synthetic point-of-sale (POS) transactions, Kafka streaming, PySpark transformations, PostgreSQL warehousing, and Apache Airflow orchestration.
 
----
+## Contents
 
-## Architecture Overview
+- [Architecture](#architecture)
+- [Capabilities](#capabilities)
+- [Prerequisites](#prerequisites)
+- [Quick start](#quick-start)
+- [Project structure](#project-structure)
+- [End-to-end workflow](#end-to-end-workflow)
+- [Data layers and quality](#data-layers-and-quality)
+- [Warehouse and analysis](#warehouse-and-analysis)
+- [Airflow operations](#airflow-operations)
+- [Docker services](#docker-services)
+- [Troubleshooting](#troubleshooting)
 
-```
-                      +-----------------------------+
-                      |   historical_pos_lines.csv  |
-                      +--------------+--------------+
-                                     |
-                                     v
-                       [ pos_producer.py ]
-                                     |
-                                     v
-                    Apache Kafka: pos.transactions
-                                     |
-                     +---------------+---------------+
-                     |                               |
-          (Valid transactions)              (Anomalies / Dirt)
-                     |                               |
-                     v                               v
-           [ bronze_writer.py ]           Kafka: pos.transactions.dlq
-                     |
-                     v
-    +----------------------------------+
-    |           BRONZE LAYER           |
-    |  data/bronze/pos/ingest_date=... |
-    +-----------------+----------------+
-                      |
-                      | PySpark (bronze_to_silver.py)
-                      v
-    +----------------------------------+
-    |           SILVER LAYER           |
-    |  Deduplicated, Cleaned POS lines |
-    |  KAMIS Wholesale & Retail Prices |
-    |  Enriched with KNBS CPI Deflator |
-    +-----------------+----------------+
-                      |
-                      | PySpark (silver_to_gold.py)
-                      v
-    +----------------------------------+
-    |            GOLD LAYER            |
-    |  - gold_store_daily_sales        |
-    |  - gold_commodity_comparison     |
-    |  - gold_monthly_category_trends  |
-    |  - fact_sales & dim_date (DW)    |
-    +----------------------------------+
-```
+## Architecture
 
----
+![Architecture diagram of the Kenya Retail Market Intelligence Data Platform](docs/architecture.svg)
 
-## 1. Starting Kafka & Kafka UI
+The platform separates raw, cleaned, and analytical data into Bronze, Silver, and Gold layers. PostgreSQL exposes a star-schema warehouse for business analysis. Airflow schedules data collection, POS simulation, Silver-layer validation, retries, and bounded backfills; Kafka and Airflow UIs provide operational visibility.
 
-Kafka and Kafka UI are grouped under the `kafka` profile:
+## Capabilities
+
+- Collect KAMIS commodity-market prices and KNBS Consumer Price Index (CPI) data.
+- Generate realistic synthetic retail stores, suppliers, products, and POS transaction lines.
+- Stream POS receipts through Kafka and write valid raw receipts to Bronze JSONL batches.
+- Reject invalid POS events to a Kafka dead-letter queue (DLQ).
+- Clean, deduplicate, validate, and CPI-enrich data with PySpark.
+- Build Gold sales and commodity-market marts plus a PostgreSQL dimensional warehouse.
+- Run five business analyses covering inflation impact, price spreads, store performance, category trends, and supplier concentration.
+- Orchestrate collection, simulation, and cleaning workflows with Airflow retries and backfills.
+
+## Prerequisites
+
+- Python 3.10 or 3.11
+- [uv](https://docs.astral.sh/uv/)
+- Docker Engine with Docker Compose
+- Java 17 for PySpark jobs, including those run by Airflow
+
+Install the Python environment from the locked dependency set:
 
 ```bash
-docker compose --profile kafka up -d
+uv sync --frozen
 ```
 
-- **Kafka UI**: Open your browser at [http://localhost:8080](http://localhost:8080)
-- **Broker**: `localhost:9092` (host) / `kafka:9092` (Docker network)
-
----
-
-## 2. Running the POS Simulation
-
-### Option A: Using Docker Compose Profile (Recommended)
-You can trigger the entire simulation as a containerized service with one command:
+If Java is not at `/usr/lib/jvm/java-17-openjdk-amd64`, set its locations before starting Airflow:
 
 ```bash
-# Trigger the simulation (starts Bronze consumer + streams 1,000 receipts):
-docker compose --profile simulation up
+export JAVA_HOME=/path/to/java-17
+export JAVA_CONFIG_DIR=/path/to/java-17-config
 ```
 
-You can also run the producer or consumer independently via Docker Compose:
+## Quick start
+
+### 1. Start the local platform
 
 ```bash
-# Run only the producer:
-docker compose --profile producer up
-
-# Run only the bronze consumer:
-docker compose --profile consumer up
+docker compose --profile airflow --profile ui up -d
 ```
 
-All ingested batches are written directly to `./data/bronze/pos/` on your host machine.
+This starts PostgreSQL, Kafka, Kafka UI, and the Airflow services. Wait for the services to become healthy, then open:
 
----
+| Service | Address | Credentials |
+| --- | --- | --- |
+| Airflow UI | http://localhost:8081 | `admin` / `admin` |
+| Kafka UI | http://localhost:8080 | — |
+| Kafka broker | `localhost:9092` | — |
+| PostgreSQL | `localhost:5433` | `retail_user` / `retail_password` |
 
-### Option B: Running from Host Terminal (Python)
+### 2. Generate source data
 
-If you prefer running directly from your host environment:
+Run the batch collection and synthetic-data generator:
 
 ```bash
-# Install dependencies
-uv sync # or: pip install kafka-python pandas
-
-# Run all-in-one:
-python src/pos_simulation/run_all.py --limit 1000 --delay 0.01
-
-# Or run consumer and producer in separate terminals:
-# Terminal 1:
-python src/pos_simulation/bronze_writer.py --exit-when-idle 15
-# Terminal 2:
-python src/pos_simulation/pos_producer.py --limit 1000 --delay 0.01
+uv run python main.py
 ```
 
----
+This downloads or refreshes KAMIS and KNBS inputs and creates the synthetic retail reference data and historical POS lines.
 
-## 3. Data Ingestion & Quality Checks (Kafka)
+### 3. Produce Bronze POS data
 
-The Bronze writer validates each receipt:
-- **Valid receipts**: Stored as partitioned JSON-Lines in `data/bronze/pos/ingest_date=YYYY-MM-DD/batch_<timestamp>.jsonl` with partition/offset metadata.
-- **Injected anomalies**: Transactions with negative quantities, bad prices, or missing products are redirected to the Dead Letter Queue (`pos.transactions.dlq`) with header annotations describing the failure reason.
-
----
-
-## 4. PySpark Medallion Processing Pipeline
-
-The PySpark pipeline processes data through **Bronze -> Silver -> Gold** layers:
-
-### Running the PySpark Pipeline
-
-#### Option A: Run via Docker Compose (Recommended)
-```bash
-docker compose --profile spark up --build
-```
-
-#### Option B: Run via Host Python / uv
-```bash
-uv sync # installs pyspark
-python src/spark/run_pipeline.py
-```
-
-### Layer Details:
-
-#### **Silver Layer (`data/silver/`)**
-- **POS Transactions**: Explodes receipt line items, deduplicates transactions (resolving injected anomalies), casts dates, and calculates transaction totals.
-- **KAMIS Market Prices**: Cleans price strings (e.g. `"50.00/Kg"` -> `50.00` numeric float), parses supply volume, and formats county dates.
-- **KNBS Deflator Series**: Formats Year-Month CPI indices and inflation multipliers.
-- **Macro Enrichment**: Joins POS lines with KNBS deflators to compute **inflation-adjusted real revenue** (`real_amount_kes = total_amount_kes * Deflation_Multiplier`).
-
-#### **Gold Layer (`data/gold/`)**
-- **`gold_store_daily_sales`**: Daily store-level nominal revenue, real revenue, basket sizes, and inflation erosion losses.
-- **`gold_commodity_market_comparison`**: Compares supermarket POS prices directly against KAMIS county agricultural market prices (spread and premium %).
-- **`gold_monthly_category_trends`**: Monthly category-level performance tracking against headline inflation.
-- **`fact_sales` & `dim_date`**: Clean dimensional models ready for PostgreSQL Data Warehouse loading.
-
----
-
-## 5. Data Warehouse (PostgreSQL Star Schema)
-
-Start PostgreSQL and load the full star schema:
+In a separate terminal, run the producer and Bronze writer together:
 
 ```bash
-# Start PostgreSQL with the warehouse profile
-docker compose --profile warehouse up -d
-
-# Initialize schema + load data  (run on host with uv)
-uv run python src/warehouse/load_warehouse.py
-
-# Run the 5 BI analytical queries
-uv run python src/warehouse/run_queries.py
-uv run python src/warehouse/run_queries.py --query 1    # specific query
-uv run python src/warehouse/run_queries.py --limit 10  # limit rows displayed
+uv run python src/pos_simulation/run_all.py --limit 1000 --delay 0.01
 ```
 
-### Schema Overview
+Valid receipts are written below `data/bronze/pos/`; invalid events are sent to the `pos.transactions.dlq` Kafka topic.
 
-| Table | Type | Description |
-|---|---|---|
-| `dim_date` | Dimension | Full 2026 calendar with week, quarter, weekend flags |
-| `dim_store` | Dimension | 30 stores across Kenyan counties |
-| `dim_product` | Dimension | Products mapped to KAMIS commodity categories |
-| `dim_supplier` | Dimension | Supplier registry with region |
-| `dim_cpi` | Dimension | KNBS monthly CPI deflators and inflation rates |
-| `fact_sales` | Fact | Grain: transaction line item (nominal + real KES) |
-| `agg_store_daily_sales` | Mart | Daily store revenue, basket size, inflation loss |
-| `agg_commodity_market_comparison` | Mart | Supermarket vs. KAMIS open-air price spreads |
-| `agg_monthly_category_trends` | Mart | Monthly category volumes vs. CPI |
-
-### Analytical Queries (5 BI Queries)
-
-1. **County Inflation Impact** — nominal vs. real revenue & purchasing power erosion per county
-2. **Supermarket vs. KAMIS Spread** — which commodities carry the highest retail premium
-3. **Store Rankings** — revenue rank, basket value, items per transaction
-4. **Monthly Category Trends** — sales volume growth vs. KNBS headline inflation MoM
-5. **Supplier Concentration** — supplier revenue share and category coverage
-
----
-
-## 6. Apache Airflow — Pipeline Orchestration
-
-Airflow orchestrates the full processing pipeline (Spark ETL → Warehouse):
-
-```
-bronze_to_silver → silver_to_gold → init_warehouse → load_warehouse → verify_warehouse
-```
-
-### Start Airflow
+### 4. Build Silver and Gold datasets
 
 ```bash
-# Start PostgreSQL (metadata + data warehouse) + Airflow
-docker compose --profile warehouse --profile airflow up -d
-
-# Open Airflow UI:  http://localhost:8085
-# Credentials:      admin / admin
+uv run python src/spark/run_pipeline.py
 ```
 
-### Triggering the DAG
-
-1. Open [http://localhost:8085](http://localhost:8085) in your browser.
-2. Find the **`retail_pipeline`** DAG in the list.
-3. Toggle it **ON** (the slider on the left).
-4. Click the **▶ Trigger DAG** button to run it immediately.
-5. Click the DAG name → **Graph** view to watch task-by-task progress.
-
-### DAG Tasks
-
-| Task | Stage | Description |
-|---|---|---|
-| `bronze_to_silver` | Spark | Cleans raw POS + KAMIS data, enriches with CPI deflators |
-| `silver_to_gold` | Spark | Builds Gold analytical marts + fact_sales Parquet |
-| `init_warehouse` | Warehouse | Executes `schema.sql` DDL in PostgreSQL |
-| `load_warehouse` | Warehouse | Loads dimensions, facts, and pre-aggregated marts |
-| `verify_warehouse` | Warehouse | Row-count audit + analytical view preview |
-
-### Running without Docker (local dev)
+### 5. Run quality checks and load the warehouse
 
 ```bash
-pip install apache-airflow
-export AIRFLOW_HOME=./airflow_home
-export DATABASE_URL="postgresql://retail_user:retail_password@localhost:5433/kenya_market_db"
-
-airflow db migrate
-airflow users create --username admin --password admin \
-  --firstname Admin --lastname User --role Admin --email admin@local
-
-# In two terminals:
-airflow scheduler
-airflow webserver --port 8085
-```
-
-
----
-
-## 7. Data Quality
-
-The `src/quality/` module runs **40+ automated checks** across every layer of the pipeline.
-Quality gate tasks in the Airflow DAG abort the pipeline on any `FAIL`, preventing bad data
-from propagating downstream.
-
-### Suites
-
-| Suite | Datasets validated | Checks |
-|---|---|---|
-| `bronze` | Bronze POS JSONL | File existence, schema, row count, null rates, TX uniqueness, freshness |
-| `silver` | Silver POS, KAMIS, KNBS CPI | Dedup, referential integrity (store/product dims), amount consistency, real≤nominal, price ranges, deflator consistency |
-| `gold` | Gold store_daily_sales | Unique (store, date) key, revenue > 0, basket value bounds, inflation loss sign |
-| `warehouse` | All PostgreSQL tables + views | Row counts, null rates, PK uniqueness, FK integrity (fact→dim), aggregation consistency, view returnability |
-
-### Running Manually
-
-```bash
-# All suites
 uv run python src/quality/run_quality.py
-
-# Single suite
-uv run python src/quality/run_quality.py --suite bronze
-uv run python src/quality/run_quality.py --suite silver
-uv run python src/quality/run_quality.py --suite gold
-uv run python src/quality/run_quality.py --suite warehouse
-
-# Report only (never exit with error code)
-uv run python src/quality/run_quality.py --no-fail
+uv run python src/warehouse/load_warehouse.py
+uv run python src/warehouse/run_queries.py
 ```
 
-Reports are saved to `data/quality_reports/<suite>_<timestamp>.json`.
+## Project structure
 
-### Airflow Quality Gates
-
-The DAG includes 4 quality gate tasks that act as hard stop-gates:
-
+```text
+.
+├── docs/                  # Architecture and supporting documentation assets
+├── data/                  # Generated and processed local data (not source code)
+├── src/
+│   ├── airflow/           # Airflow DAG definitions
+│   ├── downloaders/       # KAMIS, KNBS, and synthetic data creation
+│   ├── pos_simulation/    # Kafka producer and Bronze consumer/writer
+│   ├── quality/           # Dataset validation and JSON reporting
+│   ├── spark/             # Bronze-to-Silver and Silver-to-Gold PySpark jobs
+│   └── warehouse/         # PostgreSQL DDL, loading, and analytical SQL
+├── docker-compose.yml     # Local service topology
+├── Dockerfile             # Container image for project workloads
+└── main.py                # Batch data collection entry point
 ```
-bronze_to_silver → quality_bronze → silver_to_gold → quality_silver
-    → quality_gold → init_warehouse → load_warehouse → quality_warehouse → verify_warehouse
+
+## End-to-end workflow
+
+1. **Collect and generate data.** `main.py` runs the KAMIS downloader, KNBS downloader, and synthetic-data generator.
+2. **Stream POS receipts.** The POS producer emits receipt events to Kafka; the Bronze writer persists valid messages as JSONL and routes invalid messages to the DLQ.
+3. **Transform with Spark.** `run_pipeline.py` invokes the Bronze-to-Silver cleaner and Silver-to-Gold mart builder.
+4. **Validate data.** The quality module verifies completeness, expected columns, required-field missingness, and field formats, and writes JSON reports.
+5. **Load and analyse.** The warehouse loader creates the PostgreSQL schema, loads dimensions and facts, and the query runner executes the business analyses.
+
+## Data layers and quality
+
+| Layer | Location | Purpose |
+| --- | --- | --- |
+| Bronze | `data/bronze/` | Raw JSONL POS batches preserved from Kafka. |
+| Silver | `data/silver/` | Deduplicated, cleaned, type-safe POS, KAMIS, KNBS, and dimension Parquet datasets. |
+| Gold | `data/gold/` | Store sales, commodity market comparison, and category trend marts. |
+| Quality | `data/quality_reports/` | Timestamped JSON results from validation runs. |
+
+The Silver transformation removes duplicate POS lines using `(transaction_id, line_number)`, filters invalid records, and enriches sales with CPI deflators to calculate real revenue. KAMIS records are also deduplicated on their business key.
+
+Run all validation suites locally:
+
+```bash
+uv run python src/quality/run_quality.py
 ```
 
-If any gate fails, Airflow marks the run as `failed` and downstream tasks do not execute.
-Re-run from the failed gate once the underlying data issue is fixed.
+The `kenya_retail_data_cleaning` DAG runs Silver validation after cleaning. A failed check raises an error, records the result in a JSON report, and causes the Airflow task to fail after its configured retries.
 
-### Check Types
+## Warehouse and analysis
 
-| Check | Description |
-|---|---|
-| `null_check` | Column null % must not exceed threshold |
-| `range_check` | Numeric values must fall within [min, max] |
-| `unique_check` | Column(s) must form a unique key |
-| `referential_check` | Values must exist in a reference dimension |
-| `schema_check` | DataFrame must have all expected columns |
-| `freshness_check` | Most recent date must be within N days of today |
-| `value_set_check` | Categorical values must belong to allowed set |
-| `row_count_check` | Table must have at least min_rows rows |
-| `duplicate_check` | Exact duplicate rows must not exceed threshold |
-| `amount_consistency` | total_amount ≈ quantity × unit_price |
-| `real_amount_sanity` | real_amount ≤ nominal_amount (inflation check) |
-| `aggregation_consistency` | Fact totals match pre-aggregated mart totals |
-| `view_returnability` | Analytical SQL views must return rows |
+`src/warehouse/schema.sql` defines a PostgreSQL star schema:
+
+| Table or view | Role |
+| --- | --- |
+| `dim_date`, `dim_store`, `dim_product`, `dim_supplier`, `dim_cpi` | Descriptive dimensions for sales and inflation analysis. |
+| `fact_sales` | Transaction-line-item fact table with nominal and real KES amounts. |
+| `agg_store_daily_sales` | Pre-aggregated daily store performance. |
+| `agg_commodity_market_comparison` | Supermarket POS versus KAMIS commodity price comparison. |
+| `agg_monthly_category_trends` | Category sales trends against CPI. |
+| `v_*` views | Ready-to-query analytical business views. |
+
+Load or rebuild the local warehouse:
+
+```bash
+uv run python src/warehouse/load_warehouse.py
+```
+
+Run every analysis, or a single numbered query:
+
+```bash
+uv run python src/warehouse/run_queries.py
+uv run python src/warehouse/run_queries.py --query 1 --limit 10
+```
+
+The available analyses cover county-level inflation erosion, supermarket-to-market price spreads, store and basket rankings, category trends versus inflation, and supplier revenue concentration.
+
+## Airflow operations
+
+Airflow loads project DAGs from `src/airflow/`.
+
+| DAG | Schedule | Workflow |
+| --- | --- | --- |
+| `kenya_retail_market_intelligence` | Daily | KAMIS extraction → KNBS CPI extraction → synthetic-data generation. |
+| `kenya_retail_pos_simulation` | Daily | POS producer emits a configured number of Kafka receipt events. |
+| `kenya_retail_data_cleaning` | Daily | Bronze-to-Silver cleaning → Silver data-quality validation. |
+
+Every task inherits two retries with exponential backoff. Failed quality checks and failed subprocesses remain visible in Airflow logs and the Graph/Grid views. DAGs can also be triggered manually from the Airflow UI.
+
+### Backfills
+
+Automatic catchup is disabled to avoid replaying the full history when the services start. Use an explicit, bounded backfill when historical reprocessing is intended:
+
+```bash
+docker compose --profile airflow exec -T airflow-scheduler bash -c \
+  'source /opt/project/.venv/bin/activate && \
+   airflow backfill create --dag-id kenya_retail_market_intelligence \
+   --from-date 2026-11-01 --to-date 2026-11-02'
+```
+
+Start with a short date range and inspect the resulting DAG runs in Airflow before expanding the range.
+
+## Docker services
+
+| Command | Use case |
+| --- | --- |
+| `docker compose --profile airflow --profile ui up -d` | Start the full local platform. |
+| `docker compose --profile kafka up -d` | Start Kafka and Kafka UI. |
+| `docker compose --profile simulation up` | Run the POS producer and Bronze writer together. |
+| `docker compose --profile producer up` | Run only the POS producer. |
+| `docker compose --profile consumer up` | Run only the Bronze writer. |
+| `docker compose --profile airflow --profile ui down` | Stop services while preserving data volumes. |
+
+PostgreSQL uses a health check, and Airflow waits for its initial database migration and administrator creation before starting the API server, scheduler, and DAG processor. Docker volumes preserve the PostgreSQL, Kafka, and Airflow state across normal shutdowns.
+
+## Troubleshooting
+
+| Symptom | Suggested action |
+| --- | --- |
+| Airflow or Spark cannot find Java | Confirm Java 17 is installed and set `JAVA_HOME` and `JAVA_CONFIG_DIR` before `docker compose up`. |
+| A warehouse command cannot connect | Start the stack and confirm PostgreSQL is listening on port `5433`. |
+| No Bronze data exists | Run the POS simulation, then check Kafka UI and `data/bronze/pos/`. |
+| A quality run fails | Open the newest JSON report in `data/quality_reports/`, correct the source or transformation issue, then rerun the quality command or clear the Airflow task. |
+| A DAG does not appear | Check the Airflow DAG processor logs and confirm `src/airflow/` is mounted into the Compose stack. |
+| Services need a clean state | Stop the stack first. Only use `docker compose down -v` if you intentionally want to delete local Docker volumes. |
+
+## Stopping the platform
+
+```bash
+docker compose --profile airflow --profile ui down
+```
+
+This preserves local Docker volumes. Add `-v` only when you intentionally want to delete the PostgreSQL, Kafka, and Airflow state.

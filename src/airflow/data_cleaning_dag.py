@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from airflow import DAG
@@ -12,6 +12,15 @@ from airflow.operators.python import PythonOperator
 
 PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", Path(__file__).resolve().parents[2]))
 DATA_DIR = PROJECT_ROOT / "data"
+
+# Applied to both tasks so transient Spark, filesystem, or database-adjacent
+# failures are retried before the DAG run is marked failed.
+DEFAULT_ARGS = {
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+    "retry_exponential_backoff": True,
+    "max_retry_delay": timedelta(minutes=30),
+}
 
 
 def clean_bronze_to_silver(**context):
@@ -67,9 +76,11 @@ def validate_silver_data():
 with DAG(
     dag_id="kenya_retail_data_cleaning",
     description="Clean Bronze retail data into Silver Parquet and validate it.",
+    default_args=DEFAULT_ARGS,
     start_date=datetime(2026, 1, 1),
-    schedule=None,
+    schedule="@daily",
     catchup=False,
+    max_active_runs=1,
     tags=["kenya", "retail", "cleaning", "silver"],
 ) as dag:
     bronze_to_silver = PythonOperator(

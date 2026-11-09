@@ -24,7 +24,7 @@ x-airflow-common: &airflow-common
   volumes:
     - ./:/opt/project
     - ${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}:/opt/java:ro
-    - ./dags:/opt/airflow/dags
+    - ${JAVA_CONFIG_DIR:-/etc/java-17-openjdk}:/etc/java-17-openjdk:ro
     - ./src/airflow:/opt/airflow/dags/project
     - airflow_logs:/opt/airflow/logs
   depends_on:

@@ -43,7 +43,9 @@ DATASETS = {
         "path": DATA / "silver" / "kamis_prices",
         "columns": ["commodity_name", "market_name", "county_name", "market_date", "year_month",
                     "wholesale_kes", "retail_kes", "supply_volume_kg"],
-        "required": ["commodity_name", "market_name", "market_date", "wholesale_kes", "retail_kes"],
+        # The cleaning layer retains a KAMIS record when either market price is
+        # available, so wholesale and retail prices are individually optional.
+        "required": ["commodity_name", "market_name", "market_date"],
         "types": {"market_date": "date", "wholesale_kes": "number", "retail_kes": "number",
                   "supply_volume_kg": "number"},
     },

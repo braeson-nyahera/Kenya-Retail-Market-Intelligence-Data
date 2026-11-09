@@ -121,9 +121,21 @@ def process_kamis_bronze_to_silver(spark, data_dir: Path):
         .withColumn("market_name", F.trim(F.col("market")))
         .withColumn("county_name", F.trim(F.col("county")))
         .withColumn("market_date", F.to_date(F.col("date"), "yyyy-MM-dd"))
-        .withColumn("wholesale_kes", F.regexp_extract(F.col("wholesale"), r"([0-9]+\.?[0-9]*)", 1).cast(DoubleType()))
-        .withColumn("retail_kes", F.regexp_extract(F.col("retail"), r"([0-9]+\.?[0-9]*)", 1).cast(DoubleType()))
-        .withColumn("supply_volume_kg", F.col("supply volume").cast(DoubleType()))
+        # Spark 4 raises on direct casts of blank or malformed source values.
+        # ``try_cast`` preserves those records while representing invalid numeric
+        # fields as NULL for the downstream quality checks.
+        .withColumn(
+            "wholesale_kes",
+            F.expr("try_cast(regexp_extract(wholesale, '([0-9]+\\\\.?[0-9]*)', 1) AS DOUBLE)"),
+        )
+        .withColumn(
+            "retail_kes",
+            F.expr("try_cast(regexp_extract(retail, '([0-9]+\\\\.?[0-9]*)', 1) AS DOUBLE)"),
+        )
+        .withColumn(
+            "supply_volume_kg",
+            F.expr("try_cast(regexp_replace(`supply volume`, ',', '') AS DOUBLE)"),
+        )
         .withColumn("year_month", F.date_format(F.col("market_date"), "yyyy-MM"))
         .filter(F.col("wholesale_kes").isNotNull() | F.col("retail_kes").isNotNull())
         .dropDuplicates(["commodity_name", "market_name", "county_name", "market_date"])

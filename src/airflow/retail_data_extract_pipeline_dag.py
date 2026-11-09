@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import sys
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from airflow import DAG
@@ -22,6 +22,16 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.downloaders.kamis import main as run_kamis
 from src.downloaders.knbs import main as run_knbs
 from src.downloaders.synthetic_data import main as run_synthetic_data
+
+
+# Network downloads can fail transiently.  Retries use exponential backoff so
+# the providers are not hammered while Airflow still recovers automatically.
+DEFAULT_ARGS = {
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+    "retry_exponential_backoff": True,
+    "max_retry_delay": timedelta(minutes=30),
+}
 
 
 @contextmanager
@@ -44,9 +54,11 @@ def run_from_project_root(pipeline_step):
 with DAG(
     dag_id="kenya_retail_market_intelligence",
     description="Download Kenya market data and generate synthetic retail data.",
+    default_args=DEFAULT_ARGS,
     start_date=datetime(2026, 1, 1),
-    schedule=None,
+    schedule="@daily",
     catchup=False,
+    max_active_runs=1,
     tags=["kenya", "retail", "market-intelligence"],
 ) as dag:
     extract_kamis = PythonOperator(
